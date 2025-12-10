@@ -14,14 +14,18 @@ from contextlib import asynccontextmanager
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+# Глобальні змінні для MongoDB
+client = None
+db = None
+
 # Create lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup - підключаємося до MongoDB
+    # Startup
+    global client, db
     mongo_url = os.environ['MONGO_URL']
     db_name = os.environ['DB_NAME']
     
-    global client, db
     client = AsyncIOMotorClient(mongo_url)
     db = client[db_name]
     
@@ -29,16 +33,16 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Shutdown - закриваємо з'єднання з MongoDB
-    client.close()
-    print("✅ MongoDB connection closed")
+    # Shutdown
+    if client:
+        client.close()
+        print("✅ MongoDB connection closed")
 
 # Create the main app with lifespan
 app = FastAPI(lifespan=lifespan)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
-
 
 # Define Models
 class StatusCheck(BaseModel):
@@ -51,7 +55,7 @@ class StatusCheck(BaseModel):
 class StatusCheckCreate(BaseModel):
     client_name: str
 
-# Add your routes to the router instead of directly to app
+# Routes
 @api_router.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -61,7 +65,6 @@ async def create_status_check(input: StatusCheckCreate):
     status_dict = input.model_dump()
     status_obj = StatusCheck(**status_dict)
     
-    # Convert to dict and serialize datetime to ISO string for MongoDB
     doc = status_obj.model_dump()
     doc['timestamp'] = doc['timestamp'].isoformat()
     
@@ -70,10 +73,8 @@ async def create_status_check(input: StatusCheckCreate):
 
 @api_router.get("/status", response_model=List[StatusCheck])
 async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
     status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
     
-    # Convert ISO string timestamps back to datetime objects
     for check in status_checks:
         if isinstance(check['timestamp'], str):
             check['timestamp'] = datetime.fromisoformat(check['timestamp'])
@@ -83,6 +84,7 @@ async def get_status_checks():
 # Include the router in the main app
 app.include_router(api_router)
 
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -92,13 +94,5 @@ app.add_middleware(
 )
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Видаліть ці рядки - вони більше не потрібні
-# @app.on_event("shutdown")
-# async def shutdown_db_client():
-#     client.close()
