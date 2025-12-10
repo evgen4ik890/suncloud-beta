@@ -9,18 +9,32 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List
 import uuid
 from datetime import datetime, timezone
-
+from contextlib import asynccontextmanager
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# Create lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup - підключаємося до MongoDB
+    mongo_url = os.environ['MONGO_URL']
+    db_name = os.environ['DB_NAME']
+    
+    global client, db
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[db_name]
+    
+    print("✅ MongoDB connected successfully")
+    
+    yield
+    
+    # Shutdown - закриваємо з'єднання з MongoDB
+    client.close()
+    print("✅ MongoDB connection closed")
 
-# Create the main app without a prefix
-app = FastAPI()
+# Create the main app with lifespan
+app = FastAPI(lifespan=lifespan)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -84,6 +98,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+# Видаліть ці рядки - вони більше не потрібні
+# @app.on_event("shutdown")
+# async def shutdown_db_client():
+#     client.close()
